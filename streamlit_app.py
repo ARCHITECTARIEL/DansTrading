@@ -1,12 +1,17 @@
 import streamlit as st
+import plotly.graph_objects as go
+import yfinance as yf
+import pandas as pd
 import json
 import os
 from uuid import uuid4
+from datetime import datetime
 
-# File to store user progress
+# File paths
 PROGRESS_FILE = "user_progress.json"
+JOURNAL_FILE = "trade_journal.json"
 
-# Course structure based on the provided document
+# Course structure (abridged for brevity, focusing on charting-relevant lessons)
 COURSE_CONTENT = {
     "Module 1: Market Structure & Price Behavior": [
         {
@@ -14,27 +19,32 @@ COURSE_CONTENT = {
             "content": """
 **Lesson 1: Understanding Market Structure (Higher Highs, Higher Lows / Lower Highs, Lower Lows)**
 
-Market structure is the backbone of technical analysis and trend trading. It tells you exactly what direction the market is moving and when that direction might be changing.
+Market structure is the backbone of technical analysis. It helps identify trend direction and potential reversals.
 
 **Key Definitions:**
 - **Higher High (HH)**: A new price peak above the previous high (bullish)
-- **Higher Low (HL)**: A pullback that stays above the previous low (bullish)
-- **Lower High (LH)**: A rally that doesn't exceed the last high (bearish)
+- **Higher Low (HL)**: A pullback above the previous low (bullish)
+- **Lower High (LH)**: A rally below the last high (bearish)
 - **Lower Low (LL)**: A new low below the previous low (bearish)
 
 **How to Read Market Structure:**
-1. Start on a clean chart (5-min or 15-min for intraday futures).
-2. Zoom out to see 3-5 prior swing highs and lows.
-3. Mark swings: Higher highs and lows indicate an uptrend; lower highs and lows indicate a downtrend.
-4. Watch for a break in structure (e.g., price takes out a HL or LH) for potential reversals.
+1. Use a 5-min or 15-min chart for intraday futures.
+2. Identify 3-5 swing highs and lows.
+3. Higher highs/lows = uptrend; lower highs/lows = downtrend.
+4. A break in structure (e.g., price takes out HL) signals a reversal.
 
-**Pro Tip**: Combine structure with EMA 21 or VWAP to stay aligned with the trend.
+**Practice**: Use the chart below to identify HH/HL or LH/LL patterns.
             """,
             "quiz": [
                 {
                     "question": "What indicates a bullish market structure?",
                     "options": ["Lower Highs and Lower Lows", "Higher Highs and Higher Lows", "Flat Highs and Lows"],
                     "answer": "Higher Highs and Higher Lows"
+                },
+                {
+                    "question": "What signals a potential reversal in an uptrend?",
+                    "options": ["Price makes a new HH", "Price breaks below a HL", "Price stays above VWAP"],
+                    "answer": "Price breaks below a HL"
                 }
             ]
         },
@@ -43,19 +53,19 @@ Market structure is the backbone of technical analysis and trend trading. It tel
             "content": """
 **Lesson 2: Spotting Supply & Demand Zones**
 
-Supply and demand zones are where institutions move the market with large orders.
+Supply and demand zones are where institutions place large orders, driving price movement.
 
 **What is a Supply or Demand Zone?**
-- **Demand Zone**: Area where buyers pushed price up (bottom of a move).
-- **Supply Zone**: Area where sellers dominated, pushing price down (top of a rally).
+- **Demand Zone**: Where buyers pushed price up (bottom of a move).
+- **Supply Zone**: Where sellers pushed price down (top of a rally).
 
-**How to Identify a Zone:**
-1. Look for a base (tight consolidation of candles).
-2. Watch for a strong, fast move away (3+ candles).
-3. Mark the highest (supply) or lowest (demand) candle in the base.
-4. Wait for price to return and test the zone with confirmation (e.g., engulfing candle).
+**How to Identify:**
+1. Find a base (tight candle consolidation).
+2. Look for a strong move away (3+ candles).
+3. Mark the highest (supply) or lowest (demand) candle.
+4. Wait for price to retest with confirmation (e.g., engulfing candle).
 
-**Pro Tip**: Use a rectangle tool to mark the full body and wicks of the base zone.
+**Practice**: Use the chart tool to mark a demand zone on NQ futures.
             """,
             "quiz": [
                 {
@@ -64,8 +74,7 @@ Supply and demand zones are where institutions move the market with large orders
                     "answer": "Bullish engulfing candle at the zone"
                 }
             ]
-        },
-        # Add more lessons as needed
+        }
     ],
     "Module 2: Tools That Actually Work": [
         {
@@ -73,20 +82,17 @@ Supply and demand zones are where institutions move the market with large orders
             "content": """
 **Lesson 4: VWAP - The Intraday Anchor**
 
-VWAP (Volume Weighted Average Price) is a tool used by institutions to judge fair value.
+VWAP (Volume Weighted Average Price) is used by institutions to gauge fair value.
 
 **How VWAP Works:**
-- Calculates the average price weighted by volume from the open.
-- Above VWAP = bullish bias; below VWAP = bearish bias.
-
-**Why It's Powerful:**
-- Not laggy like moving averages.
-- Trusted by pros, funds, and algos.
-- Acts as dynamic support/resistance.
+- Averages price weighted by volume from the open.
+- Above VWAP = bullish; below VWAP = bearish.
 
 **Trading Styles:**
-1. **Trend Continuation**: Enter on a pullback to VWAP with a confirmation candle.
-2. **Mean Reversion Fade**: Fade extended moves back to VWAP in choppy sessions.
+1. **Trend Continuation**: Buy pullbacks to VWAP with confirmation.
+2. **Mean Reversion**: Fade extended moves back to VWAP.
+
+**Practice**: Use the chart to identify a VWAP pullback setup.
             """,
             "quiz": [
                 {
@@ -95,10 +101,8 @@ VWAP (Volume Weighted Average Price) is a tool used by institutions to judge fai
                     "answer": "Bullish bias"
                 }
             ]
-        },
-        # Add more lessons (EMA, Fibonacci, etc.)
-    ],
-    # Add Module 3 and 4 as needed
+        }
+    ]
 }
 
 def load_progress():
@@ -111,20 +115,74 @@ def save_progress(progress):
     with open(PROGRESS_FILE, 'w') as f:
         json.dump(progress, f, indent=4)
 
+def load_journal():
+    if os.path.exists(JOURNAL_FILE):
+        with open(JOURNAL_FILE, 'r') as f:
+            return json.load(f)
+    return []
+
+def save_journal(journal):
+    with open(JOURNAL_FILE, 'w') as f:
+        json.dump(journal, f, indent=4)
+
+def fetch_futures_data(symbol="NQ=F", period="1d", interval="5m"):
+    ticker = yf.Ticker(symbol)
+    data = ticker.history(period=period, interval=interval)
+    return data
+
+def calculate_vwap(df):
+    # VWAP = (Cumulative (Price * Volume)) / Cumulative Volume
+    df['Price'] = (df['High'] + df['Low'] + df['Close']) / 3
+    df['PriceVolume'] = df['Price'] * df['Volume']
+    df['CumulativePriceVolume'] = df['PriceVolume'].cumsum()
+    df['CumulativeVolume'] = df['Volume'].cumsum()
+    df['VWAP'] = df['CumulativePriceVolume'] / df['CumulativeVolume']
+    return df
+
+def plot_candlestick_chart(data, title="NQ Futures Chart"):
+    fig = go.Figure(data=[
+        go.Candlestick(
+            x=data.index,
+            open=data['Open'],
+            high=data['High'],
+            low=data['Low'],
+            close=data['Close'],
+            name="Candlesticks"
+        ),
+        go.Scatter(
+            x=data.index,
+            y=data['VWAP'],
+            mode='lines',
+            name='VWAP',
+            line=dict(color='purple')
+        )
+    ])
+    fig.update_layout(
+        title=title,
+        xaxis_title="Time",
+        yaxis_title="Price",
+        xaxis_rangeslider_visible=False,
+        showlegend=True
+    )
+    return fig
+
 def main():
     st.title("Pro Trader Futures Course Agent")
-    st.write("Learn to trade futures and pass the Topstep Combine with confidence.")
+    st.write("Master futures trading and prepare for the Topstep Combine with interactive tools.")
 
-    # Initialize session state for navigation
+    # Initialize session state
     if 'module' not in st.session_state:
         st.session_state.module = None
     if 'lesson' not in st.session_state:
         st.session_state.lesson = None
+    if 'trade_simulator' not in st.session_state:
+        st.session_state.trade_simulator = {'balance': 100000, 'positions': [], 'trades': []}
 
-    # Load user progress
+    # Load user data
     progress = load_progress()
+    journal = load_journal()
 
-    # Sidebar for module selection
+    # Sidebar navigation
     st.sidebar.header("Course Modules")
     modules = list(COURSE_CONTENT.keys())
     for mod in modules:
@@ -132,13 +190,27 @@ def main():
             st.session_state.module = mod
             st.session_state.lesson = None
 
-    # Main content area
+    # Real-time ticker
+    st.sidebar.header("Real-Time Ticker (NQ Futures)")
+    try:
+        ticker_data = fetch_futures_data(symbol="NQ=F", period="1d", interval="1m")
+        latest = ticker_data.iloc[-1]
+        st.sidebar.write(f"**Last Price**: ${latest['Close']:.2f}")
+        st.sidebar.write(f"**Change**: {(latest['Close'] - latest['Open']):.2f} ({((latest['Close'] - latest['Open']) / latest['Open'] * 100):.2f}%)")
+        st.sidebar.write(f"**High**: ${latest['High']:.2f} | **Low**: ${latest['Low']:.2f}")
+    except Exception as e:
+        st.sidebar.error("Error fetching ticker data. Using mock data.")
+        st.sidebar.write("**Last Price**: $14500.00 (Mock)")
+        st.sidebar.write("**Change**: +50.00 (+0.35%)")
+        st.sidebar.write("**High**: $14550.00 | **Low**: $14450.00")
+
+    # Main content
     if st.session_state.module:
         st.header(st.session_state.module)
         lessons = COURSE_CONTENT[st.session_state.module]
         st.subheader("Lessons")
         
-        # Display lesson buttons for the selected module
+        # Lesson buttons
         for i, lesson in enumerate(lessons):
             lesson_key = f"{st.session_state.module}_{lesson['title']}"
             is_complete = progress.get(lesson_key, False)
@@ -146,12 +218,68 @@ def main():
             if st.button(label, key=f"lesson_{i}"):
                 st.session_state.lesson = lesson['title']
 
-        # Display selected lesson content
+        # Display lesson content
         if st.session_state.lesson:
             lesson_data = next((l for l in lessons if l['title'] == st.session_state.lesson), None)
             if lesson_data:
                 st.subheader(lesson_data['title'])
                 st.markdown(lesson_data['content'])
+
+                # Interactive chart
+                st.subheader("Practice Chart")
+                try:
+                    chart_data = fetch_futures_data(symbol="NQ=F", period="1d", interval="5m")
+                    chart_data = calculate_vwap(chart_data)
+                    fig = plot_candlestick_chart(chart_data, f"NQ Futures with VWAP ({lesson_data['title']})")
+                    st.plotly_chart(fig, use_container_width=True)
+                except Exception as e:
+                    st.error("Error loading chart. Using placeholder.")
+                    st.write("*(Placeholder: Candlestick chart with VWAP and annotation tools)*")
+
+                # Trading simulator
+                st.subheader("Trading Simulator")
+                sim = st.session_state.trade_simulator
+                st.write(f"**Balance**: ${sim['balance']:.2f}")
+                if sim['positions']:
+                    st.write("**Open Positions**:")
+                    for pos in sim['positions']:
+                        st.write(f"- {pos['type']} NQ at ${pos['entry_price']:.2f} (Size: {pos['size']})")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("Buy NQ", key=f"buy_{lesson_data['title']}"):
+                        latest_price = ticker_data.iloc[-1]['Close'] if 'ticker_data' in locals() else 14500
+                        sim['positions'].append({
+                            'type': 'Long',
+                            'entry_price': latest_price,
+                            'size': 1,
+                            'entry_time': str(datetime.now())
+                        })
+                        sim['trades'].append({
+                            'type': 'Buy',
+                            'price': latest_price,
+                            'size': 1,
+                            'time': str(datetime.now())
+                        })
+                        st.session_state.trade_simulator = sim
+                        st.experimental_rerun()
+                with col2:
+                    if st.button("Sell NQ", key=f"sell_{lesson_data['title']}"):
+                        latest_price = ticker_data.iloc[-1]['Close'] if 'ticker_data' in locals() else 14500
+                        sim['positions'].append({
+                            'type': 'Short',
+                            'entry_price': latest_price,
+                            'size': 1,
+                            'entry_time': str(datetime.now())
+                        })
+                        sim['trades'].append({
+                            'type': 'Sell',
+                            'price': latest_price,
+                            'size': 1,
+                            'time': str(datetime.now())
+                        })
+                        st.session_state.trade_simulator = sim
+                        st.experimental_rerun()
 
                 # Quiz section
                 if lesson_data['quiz']:
@@ -162,8 +290,31 @@ def main():
                         if st.button("Check Answer", key=f"check_{q['question']}_{uuid4()}"):
                             if answer == q['answer']:
                                 st.success("Correct!")
+                                # Award badge (mock)
+                                st.write("🎉 Earned: Quiz Master Badge")
                             else:
                                 st.error(f"Incorrect. The correct answer is: {q['answer']}")
+
+                # Journaling
+                st.subheader("Trade Journal")
+                with st.form(key=f"journal_form_{lesson_data['title']}"):
+                    journal_entry = st.text_area("Log your trade or notes (e.g., setup, emotions):")
+                    submit = st.form_submit_button("Add to Journal")
+                    if submit and journal_entry:
+                        journal.append({
+                            'date': str(datetime.now()),
+                            'lesson': lesson_data['title'],
+                            'entry': journal_entry,
+                            'setup': st.session_state.lesson,
+                            'emotion': 'N/A'  # Placeholder for future input
+                        })
+                        save_journal(journal)
+                        st.success("Journal entry saved!")
+                
+                st.write("**Recent Journal Entries**:")
+                for entry in journal[-3:]:
+                    if entry['lesson'] == lesson_data['title']:
+                        st.write(f"- {entry['date']}: {entry['entry']} (Setup: {entry['setup']})")
 
                 # Mark lesson as complete
                 lesson_key = f"{st.session_state.module}_{lesson_data['title']}"
@@ -173,9 +324,6 @@ def main():
                     st.success("Lesson marked as complete!")
                     st.experimental_rerun()
 
-                # Placeholder for charting tool
-                st.write("*(Future feature: Interactive chart for practicing market structure)*")
-
     else:
         st.write("Select a module from the sidebar to begin.")
 
@@ -183,7 +331,12 @@ def main():
     st.sidebar.header("Your Progress")
     total_lessons = sum(len(lessons) for lessons in COURSE_CONTENT.values())
     completed = sum(1 for k, v in progress.items() if v)
+    st.sidebar.progress(completed / total_lessons)
     st.sidebar.write(f"Completed {completed}/{total_lessons} lessons")
+
+    # Placeholder for progress dashboard
+    st.sidebar.header("Performance Dashboard")
+    st.sidebar.write("*(Future feature: Visualize quiz scores, simulator performance, and Topstep readiness)*")
 
 if __name__ == "__main__":
     main()
